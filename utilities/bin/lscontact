@@ -1,0 +1,141 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+use English;
+use utf8;
+
+use Authen::SASL 2.10;
+use Carp;
+use Config::IniFiles;
+use Cwd;
+use File::Basename;
+use Getopt::Long;
+use Net::LDAP 0.33;
+use Net::LDAP::Control::Paged;
+use Net::LDAP::Constant ("LDAP_CONTROL_PAGED");
+use Net::LDAP::LDIF;
+
+my $user;
+my $debug = 0;
+
+my $APP_NAME = basename($0);
+my $VERSION  = "1.0";
+
+sub version() {
+    print "$APP_NAME - Show LDAP contacts - $VERSION\n";
+    print "===================================\n";
+    print "Author: Gary Greene <ggreene\@minervanetworks.com>\n";
+    print "Copyright: 2010 Gary Greene <ggreene\@minervanetworks.com>\n\n";
+    exit 0;
+}
+
+sub usage() {
+    print "$APP_NAME - Show LDAP contacts - $VERSION\n";
+    print "===================================\n";
+    print "Author: Gary Greene <ggreene\@minervanetworks.com>\n";
+    print "Copyright: 2010 Gary Greene <ggreene\@minervanetworks.com>\n\n";
+    print "Usage: $APP_NAME [OPTIONS]\n\n";
+    print "OPTIONS:\n";
+    print "    -c|--contact <USER> Who to show\n";
+    print "    -v|--version        Show this application's version\n";
+    print "    -u|--help           Show this message\n";
+    exit 1;
+}
+
+sub loadConfig {
+    my $config = Config::IniFiles->new(-file => "etc/hrs/config.ini",
+                                       -allowcontinue => 1) or
+                                       carp("Could not read configuration: $OS_ERROR\n");
+                                        
+    my $LDAP_HOST = $config->val('LDAP', 'ldapmaster') or die("Config: No LDAP hosts specified: Exiting.\n");
+    my $LDAP_PORT = $config->val('LDAP', 'port', 389);
+    my $LDAP_TIMEOUT = $config->val('LDAP', 'timeout', 5);
+    my $LDAP_BASE  = $config->val('LDAP', 'basedn') or die("Config: No basedn specified: Exiting.\n");
+    my $LDAP_ANON_BIND = $config->val('LDAP', 'anonymous_bind', 0);
+    my $LDAP_USE_SASL = $config->val('LDAP', 'sasl', 1);
+    my $LDAP_BINDDN = $config->val('LDAP_SHOW', 'binddn');
+    my $LDAP_BDN_PWD = $config->val('LDAP_SHOW', 'bindpwd');
+
+    return $LDAP_HOST, $LDAP_PORT, $LDAP_TIMEOUT, $LDAP_BASE, $LDAP_BINDDN,
+           $LDAP_ANON_BIND, $LDAP_BDN_PWD, $LDAP_USE_SASL;
+}
+
+sub processOptions() {
+    if (not defined($user)) {
+        usage();
+    }
+    if ($user eq '') {
+        usage();
+    }
+}
+
+sub main() {
+    processOptions();
+
+    my ($host, $port, $timeout, $base, $binddn, $anonBind, $bindDnPwd, $sasl) = loadConfig();
+
+    my ($ldap, $result) = "";
+
+    print "Binding to $host on port $port.\n" if $debug;
+    $ldap = Net::LDAP->new($host, port => $port) or carp("$@");
+    if ($anonBind) {
+        print "Binding anonymously.\n" if $debug;
+        $result = $ldap->bind;
+    } else {
+        if ($sasl) {
+            # Create our SASL object now to use it if we want SASL auth
+            my $saslObj = Authen::SASL->new(mechanism => 'GSSAPI', debug => 1);
+            if (not defined($saslObj)) { die("$APP_NAME: unable to create the SASL object: Exiting\n"); }
+            print "Binding with SASL mech GSSAPI.\n" if $debug;
+            eval {
+                $result = $ldap->bind(sasl => $saslObj, version => 3);
+            };
+            
+            if ($@) {
+                chomp $@;
+                die "\nBind error         : $@",
+                    "\nDetailed SASL error: ", $saslObj->error,
+                    "\nTerminatind\n";
+            }
+        } else {
+            print "Binding without SASL as $binddn with password.\n" if $debug;
+            $result = $ldap->bind($binddn, password => $bindDnPwd);
+        }
+    }
+    carp "LDAP: Cannot bind to LDAP host" if (not defined($ldap));
+
+    my $page = Net::LDAP::Control::Paged->new( size => 990 );
+    print "Searching $base for $user by cn.\n" if $debug;
+    $result = $ldap->search(base => $base,
+                            control => [$page],
+                            scope => 'sub',
+                            filter => "(\&(objectCategory=person) (objectClass=contact) (cn=$user))"
+              );
+    $result->code && die $result->error;
+    if ($result->count eq 0) {
+        print "Searching $base for $user by email.\n" if $debug;
+        $result = $ldap->search(base => $base,
+                                control => [$page],
+                                scope => 'sub',
+                                filter => "(\&(objectCategory=person) (objectClass=contact) (mail=$user))"
+                  );
+        $result->code && die $result->error;
+    }
+    if ($result->count eq 0) {
+        print "$APP_NAME: $user does not exist. Exiting.\n";
+        exit -1;
+    }
+    Net::LDAP::LDIF->new(\*STDOUT, "w", wrap => 40)->write($result->entries);
+}
+
+GetOptions(
+    'd|debug'     => \$debug,
+    'c|contact=s' => \$user,
+    'v|version'   => sub { version() },
+    'h|help'      => sub { usage() }
+) or usage();
+
+main();
+
+exit 0;
