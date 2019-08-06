@@ -17,7 +17,7 @@ use Net::LDAP::Constant ("LDAP_CONTROL_PAGED");
 use Net::LDAP::LDIF;
 
 my $user;
-my $debug = 1;
+my $debug = 0;
 
 my $APP_NAME = basename($0);
 my $VERSION  = "1.0";
@@ -37,6 +37,7 @@ sub usage() {
     print "Copyright: 2019 Gary Greene <greeneg\@tolharadys.net>\n\n";
     print "Usage: $APP_NAME [OPTIONS]\n\n";
     print "OPTIONS:\n";
+    print "    -d|--debug          Print out debugging information\n";
     print "    -u|--user <USER>    Who to show\n";
     print "    -v|--version        Show this application's version\n";
     print "    -u|--help           Show this message\n";
@@ -71,14 +72,12 @@ sub processOptions() {
     }
 }
 
-sub main() {
-    processOptions();
+sub ldap_bind {
+    my ($host, $port, $timeout, $base, $binddn, $anonBind, $bindDnPwd, $sasl, $type) = @ARG;
 
-    my ($host, $port, $timeout, $base, $binddn, $anonBind, $bindDnPwd, $sasl, $ldapType) = loadConfig();
-    my ($ldap, $result) = "";
-
+    my $result;
     print "Binding to $host on port $port.\n" if $debug;
-    $ldap = Net::LDAP->new($host, port => $port) or carp("$@");
+    my $ldap = Net::LDAP->new($host, port => $port) or carp("$@");
     if ($anonBind) {
         print "Binding anonymously.\n" if $debug;
         $result = $ldap->bind;
@@ -105,17 +104,26 @@ sub main() {
     }
     carp "LDAP: Cannot bind to LDAP host" if (not defined($ldap));
 
+    return $ldap, $base, $type;
+}
+
+sub main() {
+    processOptions();
+
+    my ($ldap, $base, $type) = ldap_bind(loadConfig());
+
     my $class = undef;
     my $filterArgs = undef;
-    if ($ldapType eq "rfc2307" || 
-        $ldapType eq "rfc3207bis") {
+    if ($type eq "rfc2307" || 
+        $type eq "rfc3207bis") {
         $class = "person";
         $filterArgs = "";
-    } elsif ($ldapType eq "ActiveDirectory") {
+    } elsif ($type eq "ActiveDirectory") {
         $class = "user";
         $filterArgs = "(objectCategory=person)";
     }
 
+    my $result;
     my $page = Net::LDAP::Control::Paged->new( size => 990 );
     print "Searching $base for $user by uid.\n" if $debug;
     $result = $ldap->search(base => $base,
@@ -159,7 +167,7 @@ sub main() {
 }
 
 GetOptions(
-    'd|debug'   => \$debug,
+    'd|debug'   => sub { $debug++ },
     'u|user=s'	=> \$user,
     'v|version' => sub { version() },
     'h|help'    => sub { usage() }

@@ -11,22 +11,19 @@ use Config::IniFiles;
 use Cwd;
 use File::Basename;
 use Getopt::Long;
-use Net::LDAP 0.33;
+use Net::LDAP;
 use Net::LDAP::Control::Paged;
 use Net::LDAP::Constant ("LDAP_CONTROL_PAGED");
 use Net::LDAP::LDIF;
 
-my $all;
-my $domain;
-my $servers;
-my $workstations;
+my $computer;
 my $debug = 0;
 
 my $APP_NAME = basename($0);
-my $VERSION  = "1.1";
+my $VERSION  = "1.0";
 
 sub version() {
-    print "$APP_NAME - Show all LDAP hosts - $VERSION\n";
+    print "$APP_NAME - Show LDAP hosts - $VERSION\n";
     print "===================================\n";
     print "Author: Gary Greene <ggreene\@minervanetworks.com>\n";
     print "Copyright: 2010 Gary Greene <ggreene\@minervanetworks.com>\n\n";
@@ -34,20 +31,15 @@ sub version() {
 }
 
 sub usage() {
-    print "$APP_NAME - Show all LDAP hosts - $VERSION\n";
+    print "$APP_NAME - Show LDAP hosts - $VERSION\n";
     print "===================================\n";
     print "Author: Gary Greene <ggreene\@minervanetworks.com>\n";
     print "Copyright: 2010 Gary Greene <ggreene\@minervanetworks.com>\n\n";
-    print "Usage: $APP_NAME <-a|-s|-w> [OPTIONS]\n\n";
-    print "REQUIRED (one of the following):\n";
-    print "    -a|--all             Show ALL hosts up to page max of 990\n";
-    print "    -s|--servers         Show ALL servers up to page max of 990\n";
-    print "    -w|--workstations    Show ALL workstations up to page max of 990\n";
-    print "OPTIONAL:\n";
-    print "    -d|--debug           Print out debugging information\n";
-    print "    -n|--domain <DOMAIN> Default domain to show\n";
-    print "    -v|--version         Show this application's version\n";
-    print "    -u|--help            Show this message\n";
+    print "Usage: $APP_NAME [OPTIONS]\n\n";
+    print "OPTIONS:\n";
+    print "    -c|--host <USER>    Which computer to show\n";
+    print "    -v|--version        Show this application's version\n";
+    print "    -u|--help           Show this message\n";
     exit 1;
 }
 
@@ -71,14 +63,10 @@ sub loadConfig {
 }
 
 sub processOptions() {
-    if (not defined($domain)) {
+    if (not defined($computer)) {
         usage();
     }
-    if ($domain eq '') {
-        usage();
-    }
-
-    if (not defined($all) and not defined($servers) and not defined($workstations)) {
+    if ($computer eq '') {
         usage();
     }
 }
@@ -86,9 +74,9 @@ sub processOptions() {
 sub ldap_bind {
     my ($host, $port, $timeout, $base, $binddn, $anonBind, $bindDnPwd, $sasl, $type) = @ARG;
 
-    my ($ldap, $result) = "";
+    my $result;
     print "Binding to $host on port $port.\n" if $debug;
-    $ldap = Net::LDAP->new($host, port => $port) or carp("$@");
+    my $ldap = Net::LDAP->new($host, port => $port) or carp("$@");
     if ($anonBind) {
         print "Binding anonymously.\n" if $debug;
         $result = $ldap->bind;
@@ -115,77 +103,61 @@ sub ldap_bind {
     }
     carp "LDAP: Cannot bind to LDAP host" if (not defined($ldap));
 
-    return $ldap,$base,$type;
+    return $ldap, $base, $type;
 }
 
-sub ldap_query {
-    my ($ldap, $base, $page, $attrs, $filter) = @ARG;
-
-    my $result = "";
-
-    $result = $ldap->search(base => $base,
-                            control => [$page],
-                            attrs   => ["$attrs"],
-                            scope   => 'sub',
-                            filter  => "$filter"
-    );
-    $result->code && die $result->error;
-    if ($result->count eq 0) {
-        print "$APP_NAME: no hosts in $domain or $domain does not exist. Exiting.\n";
-        exit -1;
-    }
-
-    if ($result->count gt 1) {
-        print "Found " . $result->count() . " entries in $domain.\n\n";
-    }
-
-    foreach my $line ($result->entries) {
-        print lc($line->get_value($attrs)), "\n";
-    }
-}
-
-sub main {
+sub main() {
     processOptions();
 
     my ($ldap, $base, $type) = ldap_bind(loadConfig());
-    my $result = "";
+    my $page = Net::LDAP::Control::Paged->new( size => 990 );
 
-    my $page = Net::LDAP::Control::Paged->new(size => 990);
-
-    my $attrs;
-    my $filter;
     my $obj_class;
     if ($type eq "ActiveDirectory") {
-        $attrs = 'dNSHostName';
-        $obj_class = "(objectCategory=computer) (objectClass=computer)"
+        $obj_class = "(objectCategory=computer) (objectClass=computer)";
     } else {
-        $attrs = 'cn';
         $obj_class = "(objectClass=ipHost)";
     }
-    if (defined($all)) {
-        print "Dumping list of all hosts for $domain.\n";
-        my $filter = "(\&${obj_class} (${attrs}=*.${domain}))";
-        ldap_query($ldap, $base, $page, $attrs, $filter);
-    } elsif (defined($servers)) {
-        print "All Windows servers in $domain:\n";
-        my $filter = "(\&${obj_class} (\|(operatingSystem=Windows Server*) (operatingSystem=Windows 2000 Server) (operatingSystem=Windows 2003*) (operatingSystem=Windows 2008*)))";
-        ldap_query($ldap, $base, $page, $attrs, $filter);
-    } elsif (defined($workstations)) {
-        print "All Windows and Mac OS X workstations in $domain:\n";
-        my $filter = "(\&${obj_class} (\|(operatingSystem=Windows 2000 Pro*) (operatingSystem=Windows XP*) (operatingSystem=Windows 7*) (operatingSystem=Mac*)))";
-        ldap_query($ldap, $base, $page, $attrs, $filter);
+
+    print "Searching $base for $computer by sAMAccountName.\n" if $debug;
+    my $result = $ldap->search(base => $base,
+                            control => [$page],
+                            scope => 'sub',
+                            filter => "(\&${obj_class} (sAMAccountName=$computer))"
+              );
+    $result->code && die $result->error;
+    if ($result->count eq 0) {
+        print "Searching $base for $computer by cn.\n" if $debug;
+        $result = $ldap->search(base => $base,
+                                control => [$page],
+                                scope => 'sub',
+                                filter => "(\&${obj_class} (cn=$computer))"
+                  );
+        $result->code && die $result->error;
     }
+    if ($result->count eq 0) {
+        print "Searching $base for $computer by FQDN.\n" if $debug;
+        $result = $ldap->search(base => $base,
+                                control => [$page],
+                                scope => 'sub',
+                                filter => "(\&${obj_class} (dNSHostName=$computer))"
+                  );
+        $result->code && die $result->error;
+    }
+    if ($result->count eq 0) {
+        print "$APP_NAME: $computer does not exist. Exiting.\n";
+        exit -1;
+    }
+    Net::LDAP::LDIF->new(\*STDOUT, "w", wrap => 40)->write($result->entries);
 }
 
 GetOptions(
-    'a|all'             => \$all,
-    'd|debug'           => sub { $debug++; },
-    'n|domain=s'	    => \$domain,
-    's|servers'         => \$servers,
-    'w|workstations'    => \$workstations,
-    'v|version'         => sub { version() },
-    'h|help'            => sub { usage() }
+    'd|debug'   => sub { $debug++; },
+    'c|host=s'	=> \$computer,
+    'v|version' => sub { version() },
+    'h|help'    => sub { usage() }
 ) or usage();
+
 main();
 
 exit 0;
