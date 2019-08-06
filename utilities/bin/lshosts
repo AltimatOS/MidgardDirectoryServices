@@ -20,7 +20,7 @@ my $all;
 my $domain;
 my $servers;
 my $workstations;
-my $debug = 0;
+my $debug = 1;
 
 my $APP_NAME = basename($0);
 my $VERSION  = "1.1";
