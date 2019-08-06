@@ -63,9 +63,10 @@ sub loadConfig {
     my $LDAP_USE_SASL = $config->val('LDAP', 'sasl', 0);
     my $LDAP_BINDDN = $config->val('LDAP_SHOW', 'binddn');
     my $LDAP_BDN_PWD = $config->val('LDAP_SHOW', 'bindpwd');
+    my $LDAP_TYPE = $config->val('LDAP', 'type', 'rfc2307');
 
     return $LDAP_HOST, $LDAP_PORT, $LDAP_TIMEOUT, $LDAP_BASE, $LDAP_BINDDN,
-           $LDAP_ANON_BIND, $LDAP_BDN_PWD, $LDAP_USE_SASL;
+           $LDAP_ANON_BIND, $LDAP_BDN_PWD, $LDAP_USE_SASL, $LDAP_TYPE;
 }
 
 sub processOptions() {
@@ -82,7 +83,7 @@ sub processOptions() {
 }
 
 sub ldap_bind {
-    my ($host, $port, $timeout, $base, $binddn, $anonBind, $bindDnPwd, $sasl) = @ARG;
+    my ($host, $port, $timeout, $base, $binddn, $anonBind, $bindDnPwd, $sasl, $type) = @ARG;
 
     my ($ldap, $result) = "";
     print "Binding to $host on port $port.\n" if $debug;
@@ -113,7 +114,7 @@ sub ldap_bind {
     }
     carp "LDAP: Cannot bind to LDAP host" if (not defined($ldap));
 
-    return $ldap,$base;
+    return $ldap,$base,$type;
 }
 
 sub ldap_query {
@@ -141,14 +142,20 @@ sub ldap_query {
 sub main {
     processOptions();
 
-    my ($ldap, $base) = ldap_bind(loadConfig());
+    my ($ldap, $base, $type) = ldap_bind(loadConfig());
     my $result = "";
 
     my $page = Net::LDAP::Control::Paged->new(size => 990);
 
+    my $filter;
+    if ($type == "ActiveDirectory") {
+        $attrs = 'dNSHostName';
+    } else {
+        $attrs = 'cn';
+    }
+    my $attrs;
     if (defined($all)) {
         print "Dumping list of all hosts for $domain.\n";
-        my $attrs = 'dNSHostName';
         my $filter = "(\&(objectCategory=computer) (objectClass=computer) (dNSHostName=*.$domain))";
         ldap_query($ldap, $base, $page, $attrs, $filter);
     } elsif (defined($servers)) {
